@@ -1,39 +1,49 @@
 [build-system]
-requires = ["setuptools>=80", "wheel", "setuptools-scm>=8"]
+requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "flowreg-session-manager"
-dynamic = ["version"]
-description = "GUI bindings for the pyflowreg session module to start multi-file correction"
+name = "pyflowreg-session-gui"
+version = "0.1.0"
+description = "PySide6 desktop GUI for configuring and running PyFlowReg session mode locally or on Deigo Slurm"
 readme = "README.md"
 authors = [
-    { name="Philipp Flotho", email="Philipp.Flotho@uni-saarland.de" }
+  { name = "PyFlowReg Contributors" }
 ]
-license = { text = "CC BY-NC-SA 4.0" }
 requires-python = ">=3.10"
-
 classifiers = [
-    "Development Status :: 3 - Alpha",
-    "Intended Audience :: Science/Research",
-    "License :: Other/Proprietary License",
-    "Operating System :: OS Independent",
-    "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
-    "Programming Language :: Python :: 3.13",
-    "Topic :: Scientific/Engineering :: Image Processing",
-    "Topic :: Scientific/Engineering :: Bio-Informatics",
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Science/Research",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Scientific/Engineering :: Image Processing"
 ]
 dependencies = [
-    "PyQt6",
-    "pyflowreg[all]",
+  "PySide6",
+  "pyflowreg",
+  "pyyaml",
+  "tomli; python_version < '3.11'"
 ]
+
+[project.optional-dependencies]
+dev = [
+  "pytest",
+  "ruff"
+]
+
+[project.scripts]
+pyflowreg-session-gui = "pyflowreg_session_gui.app:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
-[tool.setuptools_scm]
-version_scheme = "no-guess-dev"
-local_scheme = "no-local-version"
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
