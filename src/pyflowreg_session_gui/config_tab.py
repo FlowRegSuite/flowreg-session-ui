@@ -8,7 +8,6 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
     QLabel,
-    QMessageBox,
     QPushButton,
     QScrollArea,
     QVBoxLayout,
@@ -17,6 +16,7 @@ from PySide6.QtWidgets import (
 
 from .config_form import SessionConfigForm
 from .config_io import load_config_from_file, save_config_to_yaml
+from .message_dialogs import show_exception, show_info
 from .state import AppState
 
 
@@ -64,7 +64,7 @@ class ConfigTab(QWidget):
             config = self.form.to_session_config()
         except Exception as exc:
             if show_dialog:
-                QMessageBox.critical(self, "Validation Error", str(exc))
+                show_exception(self, "Validation Error", exc)
             return None
 
         self._state.config = config
@@ -85,7 +85,7 @@ class ConfigTab(QWidget):
         try:
             config = load_config_from_file(path, session_config_cls=self._session_config_cls)
         except Exception as exc:
-            QMessageBox.critical(self, "Load Error", str(exc))
+            show_exception(self, "Load Error", exc)
             return
 
         self.form.set_from_config(config)
@@ -113,7 +113,7 @@ class ConfigTab(QWidget):
         try:
             save_config_to_yaml(config, path, prefer_relative=True)
         except Exception as exc:
-            QMessageBox.critical(self, "Save Error", str(exc))
+            show_exception(self, "Save Error", exc)
             return
 
         self._state.config_path = path
@@ -123,7 +123,7 @@ class ConfigTab(QWidget):
         config = self.get_validated_config(show_dialog=True)
         if config is None:
             return
-        QMessageBox.information(self, "Validation", "SessionConfig is valid.")
+        show_info(self, "Validation", "SessionConfig is valid.")
 
     def _reset_defaults(self) -> None:
         self.form.reset_to_defaults()

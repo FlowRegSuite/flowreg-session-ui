@@ -4,7 +4,6 @@ from typing import Any, Callable
 
 from PySide6.QtWidgets import (
     QHBoxLayout,
-    QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QVBoxLayout,
@@ -12,6 +11,7 @@ from PySide6.QtWidgets import (
 )
 
 from .local_runner import LocalRunner
+from .message_dialogs import show_error_text, show_exception, show_warning
 from .state import AppState
 
 
@@ -85,7 +85,7 @@ class RunLocalTab(QWidget):
             return
 
         if self._runner.is_running():
-            QMessageBox.warning(self, "Busy", "A local run is already in progress.")
+            show_warning(self, "Busy", "A local run is already in progress.")
             return
 
         self._state.config = config
@@ -95,7 +95,7 @@ class RunLocalTab(QWidget):
         try:
             self._runner.start(config, mode)
         except Exception as exc:
-            QMessageBox.critical(self, "Local Run Error", str(exc))
+            show_exception(self, "Local Run Error", exc)
 
     def _on_run_started(self) -> None:
         self._set_buttons_enabled(False)
@@ -107,4 +107,4 @@ class RunLocalTab(QWidget):
 
     def _on_run_failed(self, message: str) -> None:
         self._append_log(message)
-        QMessageBox.critical(self, "Local Run Failed", message)
+        show_error_text(self, "Local Run Failed", message)

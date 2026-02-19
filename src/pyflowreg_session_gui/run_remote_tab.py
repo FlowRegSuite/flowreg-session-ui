@@ -7,7 +7,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QSpinBox,
@@ -17,6 +16,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .message_dialogs import show_exception, show_warning
 from .remote_runner import RemoteRunner
 from .state import AppState, PathMapping, RemoteProfile, SbatchDefaults
 
@@ -181,7 +181,7 @@ class RunRemoteTab(QWidget):
         try:
             result = self._runner.test_ssh(profile)
         except Exception as exc:
-            QMessageBox.critical(self, "SSH Error", str(exc))
+            show_exception(self, "SSH Error", exc)
             return
         self._append_status(f"SSH test succeeded: {result}")
 
@@ -194,7 +194,7 @@ class RunRemoteTab(QWidget):
         try:
             run_state = self._runner.prepare_and_upload(config, profile, self._state.path_mappings)
         except Exception as exc:
-            QMessageBox.critical(self, "Upload Error", str(exc))
+            show_exception(self, "Upload Error", exc)
             return
 
         self._state.remote_run = run_state
@@ -219,7 +219,7 @@ class RunRemoteTab(QWidget):
         try:
             stage1_jobid, stage23_jobid = self._runner.submit(profile, self._state.remote_run)
         except Exception as exc:
-            QMessageBox.critical(self, "Submission Error", str(exc))
+            show_exception(self, "Submission Error", exc)
             return
 
         self._append_status(f"Submitted jobs: stage1={stage1_jobid}, stage23={stage23_jobid}")
@@ -227,7 +227,7 @@ class RunRemoteTab(QWidget):
     def _on_refresh(self) -> None:
         profile = self._sync_state_profile()
         if not self._state.remote_run.remote_run_dir:
-            QMessageBox.warning(self, "No Run", "Upload a run before refreshing status.")
+            show_warning(self, "No Run", "Upload a run before refreshing status.")
             return
 
         status_chunks: list[str] = []
@@ -252,13 +252,13 @@ class RunRemoteTab(QWidget):
         explicit = self.cancel_job_edit.text().replace(",", " ").split()
         job_ids = explicit if explicit else self._state.remote_run.job_ids()
         if not job_ids:
-            QMessageBox.warning(self, "No Job IDs", "No job ids available to cancel.")
+            show_warning(self, "No Job IDs", "No job ids available to cancel.")
             return
 
         try:
             self._runner.cancel_jobs(profile, job_ids)
         except Exception as exc:
-            QMessageBox.critical(self, "Cancel Error", str(exc))
+            show_exception(self, "Cancel Error", exc)
             return
 
         self._append_status(f"Requested cancel for: {', '.join(job_ids)}")

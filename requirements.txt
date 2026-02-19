@@ -1,2 +1,4 @@
-PyQt6
-pyflowreg[all]
+PySide6
+pyflowreg
+pyyaml
+tomli; python_version < '3.11'

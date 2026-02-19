@@ -40,7 +40,8 @@ def map_path(path_value: str | Path, mappings: Sequence[PathMapping]) -> str:
     remote_prefix = best_mapping.remote_prefix.rstrip("/")
     if not suffix:
         return remote_prefix
-    return f"{remote_prefix}/{suffix.replace('\\', '/')}"
+    normalized_suffix = suffix.replace("\\", "/")
+    return f"{remote_prefix}/{normalized_suffix}"
 
 
 def _common_sbatch_lines(profile: RemoteProfile) -> list[str]:
