@@ -5,10 +5,10 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "pyflowreg-session-gui"
 version = "0.1.0"
-description = "PySide6 desktop GUI for configuring and running PyFlowReg session mode locally or on Deigo Slurm"
+description = "PySide6 desktop GUI for configuring and running PyFlowReg session mode locally or on Slurm HPC clusters"
 readme = "README.md"
 authors = [
-  { name = "PyFlowReg Contributors" }
+  { name = "Philipp Flotho" }
 ]
 requires-python = ">=3.10"
 classifiers = [
