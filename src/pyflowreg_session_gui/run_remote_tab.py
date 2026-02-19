@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from PySide6.QtWidgets import (
+    QDialog,
     QFormLayout,
     QHBoxLayout,
     QLabel,
@@ -17,6 +18,7 @@ from PySide6.QtWidgets import (
 )
 
 from .message_dialogs import show_exception, show_warning
+from .remote_browser_dialog import RemoteDirectoryBrowserDialog
 from .remote_runner import RemoteRunner
 from .state import AppState, PathMapping, RemoteProfile, SbatchDefaults
 
@@ -35,6 +37,7 @@ class RunRemoteTab(QWidget):
 
         self.host_edit = QLineEdit(self)
         self.remote_base_dir_edit = QLineEdit(self)
+        self.list_remote_dirs_button = QPushButton("Browse...", self)
         self.env_edit = QLineEdit(self)
 
         self.partition_edit = QLineEdit(self)
@@ -47,9 +50,17 @@ class RunRemoteTab(QWidget):
         self.gpus_spin = QSpinBox(self)
         self.gpus_spin.setRange(0, 32)
 
+        remote_base_row = QHBoxLayout()
+        remote_base_row.setContentsMargins(0, 0, 0, 0)
+        remote_base_row.addWidget(self.remote_base_dir_edit)
+        remote_base_row.addWidget(self.list_remote_dirs_button)
+
+        remote_base_widget = QWidget(self)
+        remote_base_widget.setLayout(remote_base_row)
+
         profile_layout = QFormLayout()
         profile_layout.addRow("SSH host alias", self.host_edit)
-        profile_layout.addRow("Remote base dir", self.remote_base_dir_edit)
+        profile_layout.addRow("Remote base dir", remote_base_widget)
         profile_layout.addRow("Env activation cmd", self.env_edit)
         profile_layout.addRow("Partition", self.partition_edit)
         profile_layout.addRow("Time", self.time_edit)
@@ -76,6 +87,7 @@ class RunRemoteTab(QWidget):
         self.cancel_button = QPushButton("Cancel Job", self)
 
         self.test_ssh_button.clicked.connect(self._on_test_ssh)
+        self.list_remote_dirs_button.clicked.connect(self._on_list_remote_dirs)
         self.upload_button.clicked.connect(self._on_upload)
         self.submit_button.clicked.connect(self._on_submit)
         self.refresh_button.clicked.connect(self._on_refresh)
@@ -185,6 +197,31 @@ class RunRemoteTab(QWidget):
             return
         self._append_status(f"SSH test succeeded: {result}")
 
+    def _on_list_remote_dirs(self) -> None:
+        profile = self._sync_state_profile()
+        start_dir = profile.remote_base_dir or "~"
+
+        try:
+            dialog = RemoteDirectoryBrowserDialog(
+                fetch_listing=lambda path: self._runner.list_remote_directory(profile, path),
+                start_dir=start_dir,
+                parent=self,
+            )
+        except Exception as exc:
+            show_exception(self, "Remote Directory Listing Error", exc)
+            return
+
+        if dialog.exec() != QDialog.Accepted:
+            return
+
+        value = dialog.selected_path().strip()
+        if not value:
+            show_warning(self, "Remote Directory", "No directory selected.")
+            return
+
+        self.remote_base_dir_edit.setText(value)
+        self._append_status(f"Remote base dir set to: {value}")
+
     def _on_upload(self) -> None:
         config = self._config_provider()
         if config is None:
@@ -207,6 +244,10 @@ class RunRemoteTab(QWidget):
                 ]
             )
         )
+        if run_state.upload_warnings:
+            warning_text = "\n".join(run_state.upload_warnings)
+            self._append_status(f"Warnings:\n{warning_text}")
+            show_warning(self, "Upload Warning", warning_text)
 
     def _on_submit(self) -> None:
         profile = self._sync_state_profile()

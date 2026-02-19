@@ -28,7 +28,7 @@ class MainWindow(QMainWindow):
         tabs = QTabWidget(self)
         tabs.addTab(self.config_tab, "Config")
         tabs.addTab(self.local_tab, "Run Local")
-        tabs.addTab(self.remote_tab, "Run Remote (Deigo)")
+        tabs.addTab(self.remote_tab, "Run Remote (slurm)")
 
         self.setCentralWidget(tabs)
 

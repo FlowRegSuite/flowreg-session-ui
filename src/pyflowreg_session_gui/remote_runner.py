@@ -4,6 +4,7 @@ import re
 import shlex
 import subprocess
 import tempfile
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Sequence
@@ -13,6 +14,14 @@ from .serialization import serialize_config_to_yaml
 from .state import PathMapping, RemoteProfile, RemoteRunState
 
 RunCommand = Callable[..., subprocess.CompletedProcess[str]]
+SSH_COMMON_ARGS = ["-o", "BatchMode=yes"]
+FALLBACK_ARRAY_TASKS = 2048
+
+
+@dataclass(frozen=True)
+class RemoteDirectoryListing:
+    path: str
+    children: list[str]
 
 
 def map_path(path_value: str | Path, mappings: Sequence[PathMapping]) -> str:
@@ -77,10 +86,14 @@ def generate_stage1_sbatch_script(
             "python - <<'PY'",
             "import os",
             "from pyflowreg.session.config import SessionConfig",
-            "from pyflowreg.session.stage1_compensate import run_stage1",
+            "from pyflowreg.session.stage1_compensate import discover_input_files, run_stage1",
             f"config = SessionConfig.from_file('{config_filename}')",
             "task_index = int(os.environ['SLURM_ARRAY_TASK_ID']) - 1",
-            "run_stage1(config, task_index=task_index)",
+            "n_files = len(list(discover_input_files(config)))",
+            "if task_index >= n_files:",
+            "    print(f'Skipping task {task_index}: only {n_files} files discovered.')",
+            "else:",
+            "    run_stage1(config, task_index=task_index)",
             "PY",
             "",
         ]
@@ -134,11 +147,125 @@ class RemoteRunner:
         except subprocess.CalledProcessError as exc:
             error_output = (exc.stderr or exc.stdout or "").strip()
             command = " ".join(argv)
+            if argv and argv[0] == "ssh" and exc.returncode == 255:
+                host_alias = self._extract_ssh_host(argv)
+                ssh_hint_lines = [
+                    "SSH interactive prompts are disabled in the GUI (BatchMode=yes).",
+                    "",
+                    "Run one of these once in a terminal, then retry from the GUI:",
+                    (
+                        "1) Accept key + test login: "
+                        f"ssh -o StrictHostKeyChecking=accept-new {host_alias} "
+                        '"echo connected"'
+                    ),
+                ]
+                if "Host key verification failed" in error_output:
+                    ssh_hint_lines.extend(
+                        [
+                            f"2) If key changed, clear stale key: ssh-keygen -R {host_alias}",
+                            (
+                                "3) Retry login test: "
+                                f"ssh -o StrictHostKeyChecking=accept-new {host_alias} "
+                                '"echo connected"'
+                            ),
+                        ]
+                    )
+                ssh_hint = "\n".join(ssh_hint_lines)
+                combined = "\n".join(part for part in [error_output, ssh_hint] if part).strip()
+                raise RuntimeError(f"Command failed: {command}\n{combined}") from exc
+
             raise RuntimeError(f"Command failed: {command}\n{error_output}") from exc
         return (completed.stdout or "").strip()
 
+    @staticmethod
+    def _ssh_argv(host_alias: str, remote_command: str) -> list[str]:
+        wrapped = f"sh -lc {shlex.quote(remote_command)}"
+        return ["ssh", *SSH_COMMON_ARGS, host_alias, wrapped]
+
+    @staticmethod
+    def _extract_ssh_host(argv: Sequence[str]) -> str:
+        # For our generated argv this is the second-to-last token:
+        # ssh [opts...] <host> <remote_command>
+        if len(argv) >= 3 and not str(argv[-2]).startswith("-"):
+            return str(argv[-2])
+        return str(argv[1]) if len(argv) > 1 else "<host>"
+
     def test_ssh(self, profile: RemoteProfile) -> str:
-        return self._run(["ssh", profile.host_alias, "echo connected"])
+        return self._run(self._ssh_argv(profile.host_alias, "echo connected"))
+
+    def list_remote_directory(
+        self,
+        profile: RemoteProfile,
+        directory: str,
+    ) -> RemoteDirectoryListing:
+        requested_dir = directory.strip() or "~"
+        command = (
+            f"requested={shlex.quote(requested_dir)}; "
+            'case "$requested" in '
+            '"~") requested="$HOME" ;; "~/"*) requested="$HOME/${requested#??}" ;; '
+            "esac; "
+            'if [ ! -d "$requested" ]; then '
+            'echo "__WARN_NOT_DIR__:$requested"; '
+            'requested="$HOME"; '
+            "fi; "
+            'printf "__BASE__:%s\\n" "$requested"; '
+            'find "$requested" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort'
+        )
+        output = self._run(self._ssh_argv(profile.host_alias, command))
+        return self._parse_directory_listing(output)
+
+    def list_remote_directories(
+        self,
+        profile: RemoteProfile,
+        start_dir: str | None = None,
+        *,
+        max_depth: int = 2,
+        limit: int = 200,
+    ) -> list[str]:
+        requested_dir = (start_dir or profile.remote_base_dir or "~").strip() or "~"
+        safe_depth = max(1, int(max_depth))
+        safe_limit = max(1, int(limit))
+
+        command = (
+            f"base={shlex.quote(requested_dir)}; "
+            'case "$base" in "~") base="$HOME" ;; "~/"*) base="$HOME/${base#??}" ;; esac; '
+            'mkdir -p "$base" >/dev/null 2>&1 || true; '
+            'printf "%s\\n" "$base"; '
+            f'find "$base" -mindepth 1 -maxdepth {safe_depth} -type d 2>/dev/null '
+            f"| sort | head -n {safe_limit}"
+        )
+
+        output = self._run(self._ssh_argv(profile.host_alias, command))
+        directories: list[str] = []
+        seen: set[str] = set()
+        for line in output.splitlines():
+            value = line.strip()
+            if not value or value in seen:
+                continue
+            seen.add(value)
+            directories.append(value)
+        return directories
+
+    @staticmethod
+    def _parse_directory_listing(output: str) -> RemoteDirectoryListing:
+        base_path = ""
+        children: list[str] = []
+        for line in output.splitlines():
+            text = line.strip()
+            if not text:
+                continue
+            if text.startswith("__BASE__:"):
+                base_path = text.split(":", 1)[1]
+                continue
+            if text.startswith("__WARN_NOT_DIR__:"):
+                continue
+            children.append(text)
+
+        if not base_path:
+            raise RuntimeError(f"Could not parse remote directory listing output:\n{output}")
+
+        deduped_children = sorted(set(children))
+        return RemoteDirectoryListing(path=base_path, children=deduped_children)
 
     def map_config_paths(self, config: Any, mappings: Sequence[PathMapping]) -> Any:
         mapped = deep_copy_model(config)
@@ -175,9 +302,23 @@ class RemoteRunner:
         run_name = f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         remote_run_dir = f"{profile.remote_base_dir.rstrip('/')}/{run_name}"
 
-        num_tasks = len(discover_input_files_for_config(config))
+        upload_warnings: list[str] = []
+        num_tasks = 0
+
+        try:
+            num_tasks = len(discover_input_files_for_config(config))
+        except Exception as exc:
+            upload_warnings.append(f"Local input discovery failed: {exc}")
+
         if num_tasks < 1:
-            raise RuntimeError("No input files discovered for Stage1 array submission.")
+            if not upload_warnings:
+                upload_warnings.append("Local input discovery found 0 files.")
+            num_tasks = FALLBACK_ARRAY_TASKS
+            upload_warnings.append(
+                "Using fallback Stage1 array size "
+                f"{FALLBACK_ARRAY_TASKS}. "
+                "Tasks beyond discovered files will auto-skip on the cluster."
+            )
 
         local_bundle_dir = Path(tempfile.mkdtemp(prefix="pyflowreg_session_gui_"))
         config_filename = "session_config.yaml"
@@ -191,7 +332,7 @@ class RemoteRunner:
         (local_bundle_dir / "stage1_array.sbatch").write_text(stage1_script, encoding="utf-8")
 
         quoted_remote_dir = shlex.quote(remote_run_dir)
-        self._run(["ssh", profile.host_alias, f"mkdir -p {quoted_remote_dir}"])
+        self._run(self._ssh_argv(profile.host_alias, f"mkdir -p {quoted_remote_dir}"))
         self._run(
             [
                 "rsync",
@@ -207,6 +348,7 @@ class RemoteRunner:
             local_bundle_dir=local_bundle_dir,
             config_filename=config_filename,
             num_tasks=num_tasks,
+            upload_warnings=upload_warnings,
         )
 
     def submit(self, profile: RemoteProfile, run_state: RemoteRunState) -> tuple[str, str]:
@@ -215,11 +357,10 @@ class RemoteRunner:
 
         quoted_remote_dir = shlex.quote(run_state.remote_run_dir)
         stage1_submit = self._run(
-            [
-                "ssh",
+            self._ssh_argv(
                 profile.host_alias,
                 f"cd {quoted_remote_dir} && sbatch stage1_array.sbatch",
-            ]
+            )
         )
         stage1_jobid = self._parse_job_id(stage1_submit)
 
@@ -244,14 +385,13 @@ class RemoteRunner:
         )
 
         stage23_submit = self._run(
-            [
-                "ssh",
+            self._ssh_argv(
                 profile.host_alias,
                 (
                     f"cd {quoted_remote_dir} && "
                     f"sbatch --dependency=afterok:{stage1_jobid} stage23.sbatch"
                 ),
-            ]
+            )
         )
         stage23_jobid = self._parse_job_id(stage23_submit)
 
@@ -266,24 +406,19 @@ class RemoteRunner:
 
         joined_job_ids = ",".join(job_ids)
         squeue_output = self._run(
-            [
-                "ssh",
+            self._ssh_argv(
                 profile.host_alias,
                 f"squeue -j {joined_job_ids} -o '%i %T %M %R'",
-            ]
+            )
         )
 
         sacct_output = ""
         try:
             sacct_output = self._run(
-                [
-                    "ssh",
+                self._ssh_argv(
                     profile.host_alias,
-                    (
-                        f"sacct -j {joined_job_ids} "
-                        "--format=JobID,State,Elapsed,MaxRSS --noheader"
-                    ),
-                ]
+                    f"sacct -j {joined_job_ids} --format=JobID,State,Elapsed,MaxRSS --noheader",
+                )
             )
         except RuntimeError:
             sacct_output = "(sacct unavailable)"
@@ -308,13 +443,13 @@ class RemoteRunner:
             f'if [ -n "$latest" ]; then tail -n {int(lines)} "$latest"; '
             "else echo 'No slurm logs found.'; fi"
         )
-        return self._run(["ssh", profile.host_alias, command])
+        return self._run(self._ssh_argv(profile.host_alias, command))
 
     def cancel_jobs(self, profile: RemoteProfile, job_ids: Sequence[str]) -> None:
         filtered_job_ids = [job_id for job_id in job_ids if job_id]
         if not filtered_job_ids:
             return
-        self._run(["ssh", profile.host_alias, f"scancel {' '.join(filtered_job_ids)}"])
+        self._run(self._ssh_argv(profile.host_alias, f"scancel {' '.join(filtered_job_ids)}"))
 
     @staticmethod
     def _parse_job_id(output: str) -> str:

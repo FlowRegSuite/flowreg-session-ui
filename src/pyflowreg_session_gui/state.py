@@ -37,6 +37,7 @@ class RemoteRunState:
     num_tasks: int = 0
     stage1_job_id: str | None = None
     stage23_job_id: str | None = None
+    upload_warnings: list[str] = field(default_factory=list)
 
     def job_ids(self) -> list[str]:
         ids: list[str] = []
